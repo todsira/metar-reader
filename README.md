@@ -65,3 +65,7 @@ app.py               Flask app and METAR-to-English logic
 templates/index.html Page template
 requirements.txt     Python dependencies
 ```
+
+## License
+
+Released under the [MIT License](LICENSE).
