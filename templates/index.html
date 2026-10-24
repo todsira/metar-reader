@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>METAR Reader</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #eef3f8; color: #1d2733; margin: 0; padding: 2rem 1rem; }
+  main { max-width: 560px; margin: 0 auto; }
+  h1 { margin-top: 0; }
+  form { display: flex; gap: .5rem; }
+  input { flex: 1; font-size: 1.1rem; padding: .6rem; border: 1px solid #b8c4d0; border-radius: 6px; text-transform: uppercase; }
+  button { font-size: 1.1rem; padding: .6rem 1.2rem; border: 0; border-radius: 6px; background: #2b6cb0; color: #fff; cursor: pointer; }
+  .card { background: #fff; border-radius: 10px; padding: 1.2rem 1.5rem; margin-top: 1.5rem; box-shadow: 0 1px 4px #0002; }
+  .card h2 { margin: 0 0 .2rem; font-size: 1.8rem; }
+  .sub { color: #5a6b7c; margin: 0 0 1rem; }
+  ul { padding-left: 1.2rem; line-height: 1.7; }
+  .error { background: #fde8e8; color: #9b1c1c; }
+  code { display: block; background: #f1f4f7; padding: .6rem; border-radius: 6px; font-size: .85rem; word-break: break-word; }
+  .flight { font-weight: 600; }
+</style>
+</head>
+<body>
+<main>
+  <h1>✈️ METAR Reader</h1>
+  <form method="get">
+    <input name="code" value="{{ code }}" placeholder="Airport code, e.g. KHIO" maxlength="4" autofocus>
+    <button>Get weather</button>
+  </form>
+
+  {% if error %}
+    <div class="card error">{{ error }}</div>
+  {% elif headline %}
+    <div class="card">
+      <h2>{{ headline }}</h2>
+      <p class="sub">{{ station }} ({{ ident }}) · observed {{ observed }}, {{ age }} min ago</p>
+      <ul>{% for l in lines %}<li>{{ l }}</li>{% endfor %}</ul>
+      {% if flight %}<p class="flight">{{ flight }}</p>{% endif %}
+      <code>{{ raw }}</code>
+    </div>
+  {% endif %}
+</main>
+</body>
+</html>
