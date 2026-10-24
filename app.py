@@ -92,6 +92,9 @@ def describe_weather(wx):
         intensity, codes = match.groups()
         words = [WX_CODES.get(codes[i:i + 2], "") for i in range(0, len(codes), 2)]
         text = " ".join(w for w in words if w)
+        # "showers of" / "thunderstorm with" dangle when nothing follows (VCSH).
+        for connector in (" of", " with"):
+            text = text.removesuffix(connector)
         prefix = {"-": "light ", "+": "heavy "}.get(intensity, "")
         suffix = " in the vicinity" if intensity == "VC" else ""
         phrases.append(f"{prefix}{text}{suffix}".strip())
@@ -133,20 +136,43 @@ def describe_clouds(metar):
     return "Sky: " + ", ".join(parts)
 
 
+def parse_miles(visib):
+    """Parse a visibility value into ``(miles, is_less_than)``.
+
+    Handles numbers (``0.5``), fractions (``"1/2"``), mixed numbers
+    (``"1 1/2"``) and the ``M`` prefix meaning "less than" (``"M1/4"``).
+    """
+    text = str(visib).strip()
+    less_than = text.startswith("M")
+    miles = 0.0
+    for part in text.lstrip("M").split():
+        if "/" in part:
+            numerator, denominator = part.split("/")
+            miles += float(numerator) / float(denominator)
+        else:
+            miles += float(part)
+    return miles, less_than
+
+
 def describe_visibility(visib):
     """Describe visibility in statute miles, or return None if unreported.
 
     Args:
-        visib: Miles as a number, or a string such as ``"10+"``.
+        visib: Miles as a number, or a string such as ``"10+"``, ``"1/2"``
+            or ``"M1/4"``.
     """
     if visib is None:
         return None
     if isinstance(visib, str) and visib.endswith("+"):
         return f"Visibility is excellent ({visib.rstrip('+')}+ miles)"
 
-    miles = float(visib)
+    try:
+        miles, less_than = parse_miles(visib)
+    except ValueError:
+        return None  # unparseable: omit the line rather than fail the report
     quality = "poor" if miles < 3 else "reduced" if miles < 5 else "good"
-    return f"Visibility is {quality} ({visib} miles)"
+    shown = f"under {visib.lstrip('M')}" if less_than else f"{visib}"
+    return f"Visibility is {quality} ({shown} miles)"
 
 
 def summarize(metar):
