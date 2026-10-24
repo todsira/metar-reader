@@ -1,5 +1,8 @@
 """Route tests: the Flask view with the aviationweather.gov API mocked."""
 
+import time
+
+import pytest
 import requests
 
 from tests.conftest import make_metar
@@ -70,8 +73,7 @@ def test_service_unreachable(client, monkeypatch):
 
     monkeypatch.setattr("app.requests.get", boom)
     html = client.get("/?code=KHIO").get_data(as_text=True)
-    assert "Couldn&#39;t reach the weather service" in html or \
-           "Couldn't reach the weather service" in html
+    assert "reach the weather service" in html
 
 
 def test_service_returns_bad_json(client, monkeypatch):
@@ -94,3 +96,22 @@ def test_fractional_visibility_does_not_crash(client, mock_api):
     response = client.get("/?code=KTST")
     assert response.status_code == 200
     assert "Visibility is poor (1/2 miles)" in response.get_data(as_text=True)
+
+
+@pytest.mark.parametrize("seconds_ago, expected", [
+    (5, "0 min ago"),
+    (59 * 60, "59 min ago"),
+    (3 * 3600, "180 min ago"),
+])
+def test_observation_age(client, mock_api, seconds_ago, expected):
+    mock_api([make_metar(obsTime=int(time.time()) - seconds_ago)])
+    html = client.get("/?code=KTST").get_data(as_text=True)
+    assert expected in html
+
+
+def test_missing_wind_not_shown_as_calm(client, mock_api):
+    metar = make_metar()
+    del metar["wspd"]
+    mock_api([metar])
+    html = client.get("/?code=KTST").get_data(as_text=True)
+    assert "Calm winds" not in html

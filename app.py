@@ -97,13 +97,19 @@ def describe_weather(wx):
             text = text.removesuffix(connector)
         prefix = {"-": "light ", "+": "heavy "}.get(intensity, "")
         suffix = " in the vicinity" if intensity == "VC" else ""
-        phrases.append(f"{prefix}{text}{suffix}".strip())
+        if text:  # skip tokens made only of unrecognised codes
+            phrases.append(f"{prefix}{text}{suffix}".strip())
     return phrases
 
 
 def describe_wind(metar):
-    """Describe wind speed, direction and gusts in mph."""
-    speed = metar.get("wspd") or 0
+    """Describe wind speed, direction and gusts in mph.
+
+    Returns None when the wind speed is not reported.
+    """
+    speed = metar.get("wspd")
+    if speed is None:
+        return None
     direction = metar.get("wdir")
     gust = metar.get("wgst")
 
@@ -196,7 +202,9 @@ def summarize(metar):
             line += ", feels damp and humid"
         lines.append(line)
 
-    lines.append(describe_wind(metar))
+    wind = describe_wind(metar)
+    if wind:
+        lines.append(wind)
     lines.append(describe_clouds(metar))
 
     weather = describe_weather(metar.get("wxString") or "")

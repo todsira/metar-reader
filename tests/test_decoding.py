@@ -22,6 +22,10 @@ def test_unit_conversions():
     (dict(wspd=10, wdir=200, wgst=25),
      "Wind 12 mph from the south-southwest (200°), gusting to 29 mph"),
     (dict(wspd=4, wdir="VRB"), "Wind 5 mph from a variable direction"),
+    (dict(wspd=4, wdir=None), "Wind 5 mph from a variable direction"),
+    # Regression: unreported wind must not be presented as calm.
+    ({}, None),
+    (dict(wspd=None, wdir=180), None),
 ])
 def test_describe_wind(metar, expected):
     assert describe_wind(metar) == expected
@@ -42,6 +46,11 @@ def test_describe_wind(metar, expected):
     ("VCSH", ["showers in the vicinity"]),
     ("VCTS", ["thunderstorm in the vicinity"]),
     ("VCFG", ["fog in the vicinity"]),
+    # Tokens that are not weather groups are ignored, not rendered blank.
+    ("NSW", []),
+    ("//", []),
+    ("XX", []),
+    ("XX RA", ["rain"]),
 ])
 def test_describe_weather(wx, expected):
     assert describe_weather(wx) == expected
@@ -53,6 +62,10 @@ def test_describe_weather(wx, expected):
      "Sky: a few clouds at 3,500 ft"),
     (dict(clouds=[{"cover": "SCT", "base": 2000}, {"cover": "OVC", "base": 8000}]),
      "Sky: scattered clouds at 2,000 ft, overcast at 8,000 ft"),
+    # Vertical visibility layers may carry no base height.
+    (dict(clouds=[{"cover": "VV"}]), "Sky: sky obscured"),
+    (dict(clouds=[{"cover": "VV", "base": None}]), "Sky: sky obscured"),
+    (dict(clouds=[], cover=None), "Clear skies"),
 ])
 def test_describe_clouds(metar, expected):
     assert describe_clouds(metar) == expected
@@ -116,3 +129,12 @@ class TestSummarize:
         headline, lines = summarize(make_metar(temp=None, dewp=None))
         assert headline == "Clear"
         assert not any(line.startswith("Temperature") for line in lines)
+
+    def test_empty_record_does_not_crash(self):
+        headline, lines = summarize({})
+        assert headline == "Fair"
+        assert lines == ["Clear skies"]  # no bogus "Calm winds"
+
+    def test_unknown_weather_code_adds_no_blank_line(self):
+        _, lines = summarize(make_metar(wxString="XX"))
+        assert "" not in lines
