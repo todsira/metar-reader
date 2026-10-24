@@ -5,6 +5,7 @@ the latest METAR for an airport from the aviationweather.gov API and
 summarises it in a form anyone can read.
 """
 
+import os
 import re
 from datetime import datetime, timezone
 
@@ -13,8 +14,37 @@ from flask import Flask, render_template, request
 
 app = Flask(__name__)
 
-API_URL = "https://aviationweather.gov/api/data/metar"
-REQUEST_TIMEOUT_SECONDS = 10
+
+def env_float(name, default):
+    """Read a positive number from the environment, or return the default."""
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        raise SystemExit(f"{name} must be a number, got {raw!r}")
+    if value <= 0:
+        raise SystemExit(f"{name} must be greater than zero, got {raw!r}")
+    return value
+
+
+def env_bool(name, default):
+    """Read a true/false flag (1/0, true/false, yes/no, on/off) from the environment."""
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    value = raw.strip().lower()
+    if value in ("1", "true", "yes", "on"):
+        return True
+    if value in ("0", "false", "no", "off"):
+        return False
+    raise SystemExit(f"{name} must be true or false, got {raw!r}")
+
+
+# Settings can be overridden with environment variables; see the README.
+API_URL = os.environ.get("METAR_API_URL") or "https://aviationweather.gov/api/data/metar"
+REQUEST_TIMEOUT_SECONDS = env_float("METAR_TIMEOUT", 10)
 
 # Cloud cover abbreviations -> plain English.
 COVER = {
@@ -280,6 +310,15 @@ def index():
     return render_template("index.html", **context)
 
 
-if __name__ == "__main__":
+def main():
+    """Run the Flask development server, configured from the environment."""
     # Debug mode is for local development only; never enable it in production.
-    app.run(debug=True)
+    app.run(
+        host=os.environ.get("HOST") or "127.0.0.1",
+        port=int(env_float("PORT", 5000)),
+        debug=env_bool("FLASK_DEBUG", True),
+    )
+
+
+if __name__ == "__main__":
+    main()

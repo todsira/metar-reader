@@ -50,6 +50,26 @@ You can also link straight to a result: <http://127.0.0.1:5000/?code=KHIO>
 
 > `app.py` runs Flask's development server with debug mode on. For a public deployment, use a production server such as [gunicorn](https://gunicorn.org/) (`gunicorn app:app`) and do not enable debug mode.
 
+## Configuration
+
+Settings are read from environment variables. All are optional.
+
+| Variable         | Default                                      | Description                                            |
+|------------------|----------------------------------------------|--------------------------------------------------------|
+| `METAR_API_URL`  | `https://aviationweather.gov/api/data/metar` | METAR API endpoint                                     |
+| `METAR_TIMEOUT`  | `10`                                         | Seconds to wait for the weather service                |
+| `HOST`           | `127.0.0.1`                                  | Interface the dev server binds to (`python app.py` only) |
+| `PORT`           | `5000`                                       | Port the dev server listens on (`python app.py` only)  |
+| `FLASK_DEBUG`    | `true`                                       | Debug mode for the dev server (`python app.py` only)   |
+
+For example:
+
+```bash
+PORT=8080 METAR_TIMEOUT=5 python app.py
+```
+
+An invalid value, such as `METAR_TIMEOUT=abc`, stops the app at startup with a clear error.
+
 ## Data source
 
 Weather data comes from the [Aviation Weather Center](https://aviationweather.gov/data/api/) API. No API key is required.
