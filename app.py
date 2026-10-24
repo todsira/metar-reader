@@ -1,3 +1,10 @@
+"""METAR Reader: a small Flask app that turns METAR reports into plain English.
+
+A METAR is a standardised, cryptic aviation weather report. This app looks up
+the latest METAR for an airport from the aviationweather.gov API and
+summarises it in a form anyone can read.
+"""
+
 import re
 from datetime import datetime, timezone
 
@@ -7,7 +14,9 @@ from flask import Flask, render_template, request
 app = Flask(__name__)
 
 API_URL = "https://aviationweather.gov/api/data/metar"
+REQUEST_TIMEOUT_SECONDS = 10
 
+# Cloud cover abbreviations -> plain English.
 COVER = {
     "CLR": "clear skies",
     "SKC": "clear skies",
@@ -19,6 +28,7 @@ COVER = {
     "VV": "sky obscured",
 }
 
+# Two-letter present-weather codes -> plain English.
 WX_CODES = {
     "MI": "shallow", "BC": "patchy", "PR": "partial", "DR": "drifting",
     "BL": "blowing", "SH": "showers of", "TS": "thunderstorm with",
@@ -31,28 +41,55 @@ WX_CODES = {
     "SS": "sandstorm", "DS": "duststorm",
 }
 
+# Sixteen-point compass rose, starting at north and moving clockwise.
 COMPASS = ["north", "north-northeast", "northeast", "east-northeast", "east",
            "east-southeast", "southeast", "south-southeast", "south",
            "south-southwest", "southwest", "west-southwest", "west",
            "west-northwest", "northwest", "north-northwest"]
 
+# Flight category codes -> plain English.
+FLIGHT_CAT = {
+    "VFR": "Good flying conditions (VFR)",
+    "MVFR": "Marginal flying conditions (MVFR)",
+    "IFR": "Poor flying conditions (IFR)",
+    "LIFR": "Very poor flying conditions (LIFR)",
+}
 
-def c_to_f(c):
-    return c * 9 / 5 + 32
+# Headline wording for the most significant cloud cover when nothing else
+# (rain, fog, ...) is being reported.
+SKY_HEADLINE = {
+    "CLR": "Clear", "SKC": "Clear", "NSC": "Mostly clear",
+    "FEW": "Mostly clear", "SCT": "Partly cloudy",
+    "BKN": "Mostly cloudy", "OVC": "Overcast",
+}
 
 
-def knots_to_mph(kt):
-    return kt * 1.15078
+def c_to_f(celsius):
+    """Convert degrees Celsius to degrees Fahrenheit."""
+    return celsius * 9 / 5 + 32
+
+
+def knots_to_mph(knots):
+    """Convert knots to miles per hour."""
+    return knots * 1.15078
 
 
 def describe_weather(wx):
-    """Turn a present-weather string like '-RA BR' into plain English."""
+    """Convert a METAR present-weather string into plain-English phrases.
+
+    Args:
+        wx: Space-separated weather groups, e.g. ``"-RA BR"``.
+
+    Returns:
+        A list of phrases, e.g. ``["light rain", "mist"]``.
+    """
     phrases = []
     for token in wx.split():
-        m = re.fullmatch(r"([-+]|VC)?((?:[A-Z]{2})+)", token)
-        if not m:
+        # Optional intensity prefix, then one or more two-letter codes.
+        match = re.fullmatch(r"([-+]|VC)?((?:[A-Z]{2})+)", token)
+        if not match:
             continue
-        intensity, codes = m.groups()
+        intensity, codes = match.groups()
         words = [WX_CODES.get(codes[i:i + 2], "") for i in range(0, len(codes), 2)]
         text = " ".join(w for w in words if w)
         prefix = {"-": "light ", "+": "heavy "}.get(intensity, "")
@@ -61,26 +98,33 @@ def describe_weather(wx):
     return phrases
 
 
-def describe_wind(m):
-    wspd, wdir, wgst = m.get("wspd") or 0, m.get("wdir"), m.get("wgst")
-    if wspd == 0:
+def describe_wind(metar):
+    """Describe wind speed, direction and gusts in mph."""
+    speed = metar.get("wspd") or 0
+    direction = metar.get("wdir")
+    gust = metar.get("wgst")
+
+    if speed == 0:
         return "Calm winds"
-    mph = round(knots_to_mph(wspd))
-    if wdir == "VRB" or wdir is None:
+
+    mph = round(knots_to_mph(speed))
+    if direction == "VRB" or direction is None:
         text = f"Wind {mph} mph from a variable direction"
     else:
-        # Wind direction is where the wind comes FROM.
-        name = COMPASS[round(wdir / 22.5) % 16]
-        text = f"Wind {mph} mph from the {name} ({wdir}°)"
-    if wgst:
-        text += f", gusting to {round(knots_to_mph(wgst))} mph"
+        # Meteorological convention: direction is where the wind blows FROM.
+        name = COMPASS[round(direction / 22.5) % 16]
+        text = f"Wind {mph} mph from the {name} ({direction}°)"
+    if gust:
+        text += f", gusting to {round(knots_to_mph(gust))} mph"
     return text
 
 
-def describe_clouds(m):
-    clouds = m.get("clouds") or []
+def describe_clouds(metar):
+    """Describe cloud cover, including the height of each layer in feet."""
+    clouds = metar.get("clouds") or []
     if not clouds:
-        return COVER.get(m.get("cover"), "clear skies").capitalize()
+        return COVER.get(metar.get("cover"), "clear skies").capitalize()
+
     parts = []
     for layer in clouds:
         what = COVER.get(layer.get("cover"), layer.get("cover", "clouds"))
@@ -90,89 +134,118 @@ def describe_clouds(m):
 
 
 def describe_visibility(visib):
+    """Describe visibility in statute miles, or return None if unreported.
+
+    Args:
+        visib: Miles as a number, or a string such as ``"10+"``.
+    """
     if visib is None:
         return None
     if isinstance(visib, str) and visib.endswith("+"):
         return f"Visibility is excellent ({visib.rstrip('+')}+ miles)"
+
     miles = float(visib)
     quality = "poor" if miles < 3 else "reduced" if miles < 5 else "good"
     return f"Visibility is {quality} ({visib} miles)"
 
 
-def summarize(m):
-    temp_c = m.get("temp")
+def summarize(metar):
+    """Build a friendly summary from one decoded METAR record.
+
+    Args:
+        metar: A single observation dict from the aviationweather.gov JSON API.
+
+    Returns:
+        A ``(headline, lines)`` tuple: a short headline such as
+        ``"Clear, 35°F"`` and a list of detail lines.
+    """
+    temp_c = metar.get("temp")
+    dewpoint_c = metar.get("dewp")
     lines = []
+
     if temp_c is not None:
         line = f"Temperature {round(c_to_f(temp_c))}°F ({round(temp_c)}°C)"
-        if m.get("dewp") is not None:
-            spread = temp_c - m["dewp"]
-            if spread <= 2:
-                line += ", feels damp and humid"
+        # A temperature within 2°C of the dew point means near-saturated air.
+        if dewpoint_c is not None and temp_c - dewpoint_c <= 2:
+            line += ", feels damp and humid"
         lines.append(line)
-    lines.append(describe_wind(m))
-    lines.append(describe_clouds(m))
-    for phrase in describe_weather(m.get("wxString") or ""):
-        lines.append(phrase.capitalize())
-    vis = describe_visibility(m.get("visib"))
-    if vis:
-        lines.append(vis)
-    if m.get("altim"):
-        lines.append(f"Pressure {m['altim'] * 0.02953:.2f} inHg ({round(m['altim'])} hPa)")
 
-    wx = describe_weather(m.get("wxString") or "")
-    cover = m.get("cover") or ((m.get("clouds") or [{}])[0].get("cover"))
-    if wx:
-        headline = wx[0].capitalize()
+    lines.append(describe_wind(metar))
+    lines.append(describe_clouds(metar))
+
+    weather = describe_weather(metar.get("wxString") or "")
+    lines.extend(phrase.capitalize() for phrase in weather)
+
+    visibility = describe_visibility(metar.get("visib"))
+    if visibility:
+        lines.append(visibility)
+
+    if metar.get("altim"):
+        # The API reports altimeter setting in hPa; US readers expect inHg.
+        lines.append(f"Pressure {metar['altim'] * 0.02953:.2f} inHg "
+                     f"({round(metar['altim'])} hPa)")
+
+    # Headline: significant weather wins; otherwise fall back to sky cover.
+    if weather:
+        headline = weather[0].capitalize()
     else:
-        headline = {"CLR": "Clear", "SKC": "Clear", "NSC": "Mostly clear",
-                    "FEW": "Mostly clear", "SCT": "Partly cloudy",
-                    "BKN": "Mostly cloudy", "OVC": "Overcast"}.get(cover, "Fair")
+        cover = metar.get("cover") or (metar.get("clouds") or [{}])[0].get("cover")
+        headline = SKY_HEADLINE.get(cover, "Fair")
     if temp_c is not None:
         headline += f", {round(c_to_f(temp_c))}°F"
     return headline, lines
 
 
-FLIGHT_CAT = {
-    "VFR": "Good flying conditions (VFR)",
-    "MVFR": "Marginal flying conditions (MVFR)",
-    "IFR": "Poor flying conditions (IFR)",
-    "LIFR": "Very poor flying conditions (LIFR)",
-}
-
-
 @app.route("/", methods=["GET"])
 def index():
+    """Render the search form and, when a code is given, the decoded report."""
     code = request.args.get("code", "").strip().upper()
-    ctx = {"code": code}
+    context = {"code": code}
     if not code:
-        return render_template("index.html", **ctx)
+        return render_template("index.html", **context)
+
+    # ICAO codes are 4 letters; US IATA-style codes are 3.
     if not re.fullmatch(r"[A-Z0-9]{3,4}", code):
-        ctx["error"] = "Please enter a 3 or 4 character airport code, like KHIO."
-        return render_template("index.html", **ctx)
+        context["error"] = "Please enter a 3 or 4 character airport code, like KHIO."
+        return render_template("index.html", **context)
+
     # US airports are often typed without the K prefix (e.g. HIO, JFK).
     ident = "K" + code if len(code) == 3 else code
-    try:
-        resp = requests.get(API_URL, params={"ids": ident, "format": "json"}, timeout=10)
-        resp.raise_for_status()
-        data = resp.json() if resp.content else []
-    except (requests.RequestException, ValueError):
-        ctx["error"] = "Couldn't reach the weather service. Please try again shortly."
-        return render_template("index.html", **ctx)
-    if not data:
-        ctx["error"] = f"No METAR found for {ident}. Check the code and try again."
-        return render_template("index.html", **ctx)
 
-    m = data[0]
-    headline, lines = summarize(m)
-    obs = datetime.fromtimestamp(m["obsTime"], tz=timezone.utc)
-    mins = int((datetime.now(timezone.utc) - obs).total_seconds() // 60)
-    ctx.update(
-        station=m.get("name", ident), ident=ident, headline=headline, lines=lines,
-        raw=m.get("rawOb"), flight=FLIGHT_CAT.get(m.get("fltCat")),
-        observed=obs.strftime("%H:%M UTC"), age=mins,
+    try:
+        response = requests.get(
+            API_URL,
+            params={"ids": ident, "format": "json"},
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        # The API returns an empty body when the station is unknown.
+        data = response.json() if response.content else []
+    except (requests.RequestException, ValueError):
+        context["error"] = "Couldn't reach the weather service. Please try again shortly."
+        return render_template("index.html", **context)
+
+    if not data:
+        context["error"] = f"No METAR found for {ident}. Check the code and try again."
+        return render_template("index.html", **context)
+
+    metar = data[0]
+    headline, lines = summarize(metar)
+    observed = datetime.fromtimestamp(metar["obsTime"], tz=timezone.utc)
+    age_minutes = int((datetime.now(timezone.utc) - observed).total_seconds() // 60)
+    context.update(
+        station=metar.get("name", ident),
+        ident=ident,
+        headline=headline,
+        lines=lines,
+        raw=metar.get("rawOb"),
+        flight=FLIGHT_CAT.get(metar.get("fltCat")),
+        observed=observed.strftime("%H:%M UTC"),
+        age=age_minutes,
     )
-    return render_template("index.html", **ctx)
+    return render_template("index.html", **context)
 
 
 if __name__ == "__main__":
+    # Debug mode is for local development only; never enable it in production.
     app.run(debug=True)
